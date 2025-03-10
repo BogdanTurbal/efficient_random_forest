@@ -1,7 +1,3 @@
-// sequential.cpp
-// A single‐file sequential implementation of Random Forest with AUC and accuracy
-// Uses std::shuffle (instead of deprecated random_shuffle)
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -421,28 +417,23 @@ public:
 int main() {
     auto start_total = high_resolution_clock::now();
     
-    // Adjust sizes as needed.
-    int trainSize = 30000;  // training samples
-    int testSize  = 1000;   // test samples
+    int trainSize = 30000;  
+    int testSize  = 1000;   
     int featureSize = 107;
     
-    // Read training data (assumed labeled).
     Data trainData(true, trainSize, featureSize);
     trainData.read("train.txt");
     
-    // Build and fit the random forest.
     RandomForest rf(2000, "gini", "log2", 3, 150, 1, 1000000);
     auto start_fit = high_resolution_clock::now();
     rf.fit(trainData);
     auto end_fit = high_resolution_clock::now();
     auto fit_duration = duration_cast<milliseconds>(end_fit - start_fit);
     
-    // Compute predictions on training data.
     vector<double> trainPred = rf.predictProba(trainData);
     double aucTrain = computeAUC(trainPred, trainData.getTarget());
     double accTrain = computeAccuracy(trainPred, trainData.getTarget());
     
-    // Read test data (assumed labeled for metric computation).
     Data testData(true, testSize, featureSize);
     testData.read("test.txt");
     
@@ -454,13 +445,11 @@ int main() {
     double aucTest = computeAUC(testPred, testData.getTarget());
     double accTest = computeAccuracy(testPred, testData.getTarget());
     
-    // Write predictions to CSV.
     writeDataToCSV(testPred, testData.getTarget(), "results.csv", true);
     
     auto end_total = high_resolution_clock::now();
     auto total_duration = duration_cast<milliseconds>(end_total - start_total);
     
-    // Print timing and metrics.
     cout << "Training time: " << fit_duration.count() << " ms" << endl;
     cout << "Prediction time: " << pred_duration.count() << " ms" << endl;
     cout << "Total time: " << total_duration.count() << " ms" << endl;

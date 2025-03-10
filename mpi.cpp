@@ -1,8 +1,3 @@
-// mpi.cpp
-// A single‐file MPI parallel implementation of Random Forest with AUC and accuracy.
-// Each MPI process builds a subset of trees; predictions on train and test data are reduced.
-// Uses std::shuffle (instead of deprecated random_shuffle)
-
 #include <mpi.h>
 #include <iostream>
 #include <fstream>
@@ -407,20 +402,16 @@ int main(int argc, char *argv[]) {
     int testSize  = 1000;
     int featureSize = 107;
     
-    // Each process reads its own copy of the data.
     Data trainData(true, trainSize, featureSize);
     trainData.read("train.txt");
     Data testData(true, testSize, featureSize);
     testData.read("test.txt");
     
-    // Determine how many trees each process builds.
-  // Determine how many trees each process builds.
     int totalTrees = 2000;
     int localTrees = totalTrees / nprocs;
     if(rank < totalTrees % nprocs)
         localTrees++;
 
-    // Use localTrees here so each process builds only its share.
     RandomForest rf(localTrees, "gini", "log2", 3, 150, 1, 1000000);
 
     auto start_fit = high_resolution_clock::now();
@@ -428,20 +419,17 @@ int main(int argc, char *argv[]) {
     auto end_fit = high_resolution_clock::now();
     auto fit_duration = duration_cast<milliseconds>(end_fit - start_fit);
 
-    // Predict on training data locally.
     vector<double> localTrainPred = rf.predictProba(trainData);
     int nTrain = trainData.getSampleSize();
     vector<double> globalTrainPred(nTrain, 0.0);
     MPI_Reduce(localTrainPred.data(), globalTrainPred.data(), nTrain, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    // Predict on test data locally.
     vector<double> localTestPred = rf.predictProba(testData);
     int nTest = testData.getSampleSize();
     vector<double> globalTestPred(nTest, 0.0);
     MPI_Reduce(localTestPred.data(), globalTestPred.data(), nTest, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if(rank == 0) {
-        // Average over total trees from all processes.
         for (int i = 0; i < nTrain; i++)
             globalTrainPred[i] /= nprocs;
         for (int i = 0; i < nTest; i++)

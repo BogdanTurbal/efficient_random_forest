@@ -1,7 +1,3 @@
-// openmp.cpp
-// A single‐file OpenMP parallel implementation of Random Forest with AUC and accuracy
-// Uses std::shuffle (instead of deprecated random_shuffle)
-
 #include <iostream>
 #include <fstream>
 #include <sstream>
