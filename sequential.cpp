@@ -11,22 +11,19 @@
 #include <functional>
 #include <memory>
 #include <random>
-
+#include <cstdlib>  // for system()
 using namespace std;
 using namespace std::chrono;
 
-// Global (or thread_local) random engine for shuffling.
+// Global random engine.
 thread_local std::mt19937 rng(std::random_device{}());
 
 // ---------------- Utility Functions ----------------
-
-// Splits a string by whitespace.
 vector<string> splitBySpace(const string &sentence) {
     istringstream iss(sentence);
     return vector<string>{istream_iterator<string>(iss), istream_iterator<string>()};
 }
 
-// Writes results (with optional true labels) to a CSV file.
 void writeDataToCSV(const vector<double> &results, const vector<int>& target, const string &filename, bool train) {
     ofstream out(filename);
     if (out.is_open()) {
@@ -46,36 +43,29 @@ void writeDataToCSV(const vector<double> &results, const vector<int>& target, co
     }
 }
 
-// ---------------- Metric Functions ----------------
-
-// Compute AUC using the rank-sum method.
 double computeAUC(const vector<double>& scores, const vector<int>& labels) {
     int n = scores.size();
     vector<pair<double, int>> arr;
     for (int i = 0; i < n; i++) {
         arr.push_back({scores[i], labels[i]});
     }
-    sort(arr.begin(), arr.end(), [](auto &a, auto &b) {
-        return a.first < b.first;
-    });
+    sort(arr.begin(), arr.end(), [](auto &a, auto &b) { return a.first < b.first; });
     int posCount = 0, negCount = 0;
     for (auto &p : arr) {
         if (p.second == 1) posCount++;
         else negCount++;
     }
     if (posCount == 0 || negCount == 0)
-        return 0.5; // Undefined, return chance level.
+        return 0.5;
     double rankSum = 0;
     for (int i = 0; i < n; i++) {
-        if (arr[i].second == 1) {
-            rankSum += (i + 1); // Ranks are 1-indexed.
-        }
+        if (arr[i].second == 1)
+            rankSum += (i + 1);
     }
     double auc = (rankSum - posCount * (posCount + 1) / 2.0) / (posCount * negCount);
     return auc;
 }
 
-// Compute accuracy by thresholding probabilities at 0.5.
 double computeAccuracy(const vector<double>& scores, const vector<int>& labels) {
     int correct = 0;
     int n = scores.size();
@@ -88,7 +78,6 @@ double computeAccuracy(const vector<double>& scores, const vector<int>& labels) 
 }
 
 // ---------------- Data Class ----------------
-
 class Data {
 private:
     vector<vector<double>> features;
@@ -97,7 +86,6 @@ private:
     bool isTrain;
     vector<int> samplesVec;
 public:
-    // size: approximate number of samples; featureSize: number of features.
     Data(bool isTrain = true, int size = 1000, int featureSize = 201)
       : featureSize(featureSize), isTrain(isTrain) {
         features.reserve(size);
@@ -108,9 +96,6 @@ public:
         }
     }
     
-    // Read data from a file.
-    // For training: expected format: label featIndex:featValue featIndex:featValue ...
-    // For testing (if labeled): same as training.
     void read(const string &filename) {
         ifstream inputFile(filename);
         if (!inputFile.is_open()) {
@@ -123,9 +108,8 @@ public:
             if(line.empty()) continue;
             auto tokens = splitBySpace(line);
             vector<double> sample(featureSize, 0);
-            if(isTrain && !tokens.empty()) {
+            if(isTrain && !tokens.empty())
                 target.push_back(atoi(tokens[0].c_str()));
-            }
             for (size_t i = startIndex; i < tokens.size(); i++) {
                 size_t pos = tokens[i].find(":");
                 if(pos != string::npos) {
@@ -160,17 +144,14 @@ public:
         return samplesVec;
     }
     
-    // Returns a (possibly shuffled) subset of sample indices.
     vector<int> generateSample(int num) const {
         vector<int> samples = samplesVec;
-        if(num == -1 || num >= (int)samples.size()) {
+        if(num == -1 || num >= (int)samples.size())
             return samples;
-        }
         std::shuffle(samples.begin(), samples.end(), rng);
         return vector<int>(samples.begin(), samples.begin() + num);
     }
     
-    // Returns a subset of feature indices based on a function (e.g. sqrt or log2).
     vector<int> generateFeatures(function<int(int)> func) const {
         int m = func(getFeatureSize());
         vector<int> allFeatures;
@@ -182,7 +163,6 @@ public:
         return vector<int>(allFeatures.begin(), allFeatures.begin() + m);
     }
     
-    // Sorts sample indices by a given feature.
     void sortByFeature(vector<int> &indices, int featureIndex) const {
         sort(indices.begin(), indices.end(), [this, featureIndex](int a, int b){
             return readFeature(a, featureIndex) < readFeature(b, featureIndex);
@@ -195,7 +175,6 @@ public:
 };
 
 // ---------------- Decision Tree Functions ----------------
-
 int computeTrueCount(const vector<int>& samples, const Data &data) {
     int total = 0;
     for(auto idx : samples) {
@@ -226,8 +205,6 @@ double computeGiniIndex(int leftTrue, int leftSize, int rightTrue, int rightSize
     return leftWeight * computeGini(leftTrue, leftSize) + rightWeight * computeGini(rightTrue, rightSize);
 }
 
-// ---------------- Helper Functions for Feature Selection ----------------
-
 int _sqrt(int num) {
     return max(1, (int) sqrt(num));
 }
@@ -241,7 +218,6 @@ int _none(int num) {
 }
 
 // ---------------- DecisionTree Class ----------------
-
 class DecisionTree {
 private:
     struct Node {
@@ -259,31 +235,28 @@ private:
     int maxDepth;
     int minSamplesSplit;
     int minSamplesLeaf;
-    int sampleNum; // number of samples to use for this tree (-1 for all)
+    int sampleNum;
     function<double(int, int, int, int)> criterionFunc;
     function<int(int)> maxFeatureFunc;
     
-    // Recursively builds a decision tree.
     shared_ptr<Node> constructNode(const vector<int>& samples, const Data &data, int depth) {
         double prob = computeTargetProb(samples, data);
         auto node = make_shared<Node>();
         node->depth = depth;
-        // Stop if pure, too few samples, or reached max depth.
-        if(prob == 0.0 || prob == 1.0 || samples.size() <= (size_t)minSamplesSplit || (maxDepth != -1 && depth >= maxDepth)) {
+        if(prob == 0.0 || prob == 1.0 || samples.size() <= (size_t)minSamplesSplit ||
+           (maxDepth != -1 && depth >= maxDepth)) {
             node->isLeaf = true;
             node->prob = prob;
             return node;
         }
-        // Choose best split from a random subset of features.
         vector<int> features = data.generateFeatures(maxFeatureFunc);
         double bestGini = 1e9;
         int bestFeature = features[0];
         double bestThreshold = 0;
         for (int feat : features) {
             set<double> values;
-            for (int idx : samples) {
+            for (int idx : samples)
                 values.insert(data.readFeature(idx, feat));
-            }
             for (auto val : values) {
                 vector<int> left, right;
                 int leftTrue = 0, rightTrue = 0;
@@ -314,19 +287,31 @@ private:
                 right.push_back(idx);
         }
         if(left.size() < (size_t)minSamplesLeaf || right.size() < (size_t)minSamplesLeaf) {
-            node->isLeaf = true;
-            node->prob = prob;
-            return node;
+            auto leaf = make_shared<Node>();
+            leaf->isLeaf = true;
+            leaf->prob = prob;
+            return leaf;
         }
-        node->featureIndex = bestFeature;
-        node->threshold = bestThreshold;
-        node->left = constructNode(left, data, depth + 1);
-        node->right = constructNode(right, data, depth + 1);
-        return node;
+        auto nodePtr = make_shared<Node>();
+        nodePtr->featureIndex = bestFeature;
+        nodePtr->threshold = bestThreshold;
+        nodePtr->left = constructNode(left, data, depth + 1);
+        nodePtr->right = constructNode(right, data, depth + 1);
+        return nodePtr;
+    }
+    
+    void saveNode(shared_ptr<Node> node, ofstream &out, int depth) const {
+        for (int i = 0; i < depth; i++) out << "  ";
+        if(node->isLeaf) {
+            out << "Leaf: prob=" << node->prob << "\n";
+        } else {
+            out << "Node: feature=" << node->featureIndex << ", threshold=" << node->threshold << "\n";
+            saveNode(node->left, out, depth + 1);
+            saveNode(node->right, out, depth + 1);
+        }
     }
     
 public:
-    // Constructor parameters mirror common RandomForest settings.
     DecisionTree(const string &criterion = "gini", int maxDepth = -1, int minSamplesSplit = 2,
                  int minSamplesLeaf = 1, int sampleNum = -1, const string &maxFeatures = "auto")
       : maxDepth(maxDepth), minSamplesSplit(minSamplesSplit),
@@ -334,7 +319,7 @@ public:
         if(criterion == "gini")
             criterionFunc = computeGiniIndex;
         else
-            criterionFunc = computeGiniIndex; // default to gini
+            criterionFunc = computeGiniIndex;
         if(maxFeatures == "auto" || maxFeatures == "sqrt")
             maxFeatureFunc = _sqrt;
         else if(maxFeatures == "log2")
@@ -343,13 +328,11 @@ public:
             maxFeatureFunc = _none;
     }
     
-    // Fit the tree.
     void fit(const Data &data) {
         vector<int> samples = data.generateSample(sampleNum);
         root = constructNode(samples, data, 0);
     }
     
-    // Compute probability for a given sample.
     double computeProb(int sampleIndex, const Data &data) const {
         auto node = root;
         while(!node->isLeaf) {
@@ -361,26 +344,34 @@ public:
         return node->prob;
     }
     
-    // Aggregate predictions for every sample.
     void predictProba(const Data &data, vector<double> &results) const {
         int n = data.getSampleSize();
         for (int i = 0; i < n; i++) {
             results[i] += computeProb(i, data);
         }
     }
+    
+    void save(const string &filename) const {
+        ofstream out(filename);
+        if (!out) {
+            cerr << "Failed to open file " << filename << " for saving model." << endl;
+            return;
+        }
+        saveNode(root, out, 0);
+        out.close();
+    }
 };
 
-// ---------------- RandomForest Class (Sequential) ----------------
-
+// ---------------- RandomForest Class (Sequential Version) ----------------
 class RandomForest {
 private:
     vector<DecisionTree> trees;
     int nEstimators;
 public:
-    // nEstimators: number of trees; eachTreeSamplesNum: number of samples per tree (-1 for all)
+    // "save_all" parameter passed to constructor.
     RandomForest(int nEstimators = 10, string criterion = "gini", string maxFeatures = "auto",
                  int maxDepth = -1, int minSamplesSplit = 2, int minSamplesLeaf = 1,
-                 int eachTreeSamplesNum = -1)
+                 int eachTreeSamplesNum = -1, bool save_all = false)
       : nEstimators(nEstimators) {
         trees.reserve(nEstimators);
         for (int i = 0; i < nEstimators; i++) {
@@ -389,42 +380,52 @@ public:
         }
     }
     
-    // Fit each tree sequentially.
     void fit(const Data &data) {
         for (int i = 0; i < nEstimators; i++) {
             trees[i].fit(data);
-            //cout << "Fitted tree " << i + 1 << "/" << nEstimators << endl;
         }
     }
     
-    // Predict probabilities by aggregating predictions.
     vector<double> predictProba(const Data &data) {
         int n = data.getSampleSize();
         vector<double> results(n, 0.0);
         for (int i = 0; i < nEstimators; i++) {
             trees[i].predictProba(data, results);
-            //cout << "Predicted with tree " << i + 1 << "/" << nEstimators << endl;
         }
         for (int i = 0; i < n; i++) {
             results[i] /= nEstimators;
         }
         return results;
     }
+    
+    void saveModels(const string &prefix) const {
+        for (size_t i = 0; i < trees.size(); i++) {
+            string filename = "models/" + prefix + "_tree_" + to_string(i) + ".txt";
+            trees[i].save(filename);
+        }
+    }
 };
 
 // ---------------- Main ----------------
-
-int main() {
+int main(int argc, char *argv[]) {
+    bool save_all = false;
+    if(argc > 1) {
+        string arg = argv[1];
+        if(arg == "save_all")
+            save_all = true;
+    }
+    system("mkdir -p models");
+    
     auto start_total = high_resolution_clock::now();
     
-    int trainSize = 30000;  
-    int testSize  = 1000;   
+    int trainSize = 30000;
+    int testSize  = 1000;
     int featureSize = 107;
     
     Data trainData(true, trainSize, featureSize);
     trainData.read("train.txt");
     
-    RandomForest rf(2000, "gini", "log2", 3, 150, 1, 1000000);
+    RandomForest rf(100, "gini", "log2", 3, 150, 1, 1000000, save_all);
     auto start_fit = high_resolution_clock::now();
     rf.fit(trainData);
     auto end_fit = high_resolution_clock::now();
@@ -455,6 +456,10 @@ int main() {
     cout << "Total time: " << total_duration.count() << " ms" << endl;
     cout << "  Train Accuracy: " << accTrain << endl;
     cout << "  Test Accuracy: "  << accTest  << endl;
+    
+    if(save_all) {
+        rf.saveModels("results_model_sequential");
+    }
     
     return 0;
 }
