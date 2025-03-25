@@ -12,7 +12,7 @@
 #include <functional>
 #include <memory>
 #include <random>
-
+#include <cstdlib>  
 using namespace std;
 using namespace std::chrono;
 
@@ -20,7 +20,6 @@ using namespace std::chrono;
 std::mt19937 rng(std::random_device{}());
 
 // ---------------- Utility Functions ----------------
-
 vector<string> splitBySpace(const string &sentence) {
     istringstream iss(sentence);
     return vector<string>{istream_iterator<string>(iss), istream_iterator<string>()};
@@ -46,7 +45,6 @@ void writeDataToCSV(const vector<double> &results, const vector<int>& target, co
 }
 
 // ---------------- Metric Functions ----------------
-
 double computeAUC(const vector<double>& scores, const vector<int>& labels) {
     int n = scores.size();
     vector<pair<double, int>> arr;
@@ -82,7 +80,6 @@ double computeAccuracy(const vector<double>& scores, const vector<int>& labels) 
 }
 
 // ---------------- Data Class ----------------
-
 class Data {
 private:
     vector<vector<double>> features;
@@ -149,7 +146,6 @@ public:
         return samplesVec;
     }
     
-    // Use std::shuffle.
     vector<int> generateSample(int num) const {
         vector<int> samples = samplesVec;
         if(num == -1 || num >= (int)samples.size())
@@ -180,7 +176,6 @@ public:
 };
 
 // ---------------- Decision Tree Functions ----------------
-
 int computeTrueCount(const vector<int>& samples, const Data &data) {
     int total = 0;
     for(auto idx : samples)
@@ -223,7 +218,6 @@ int _none(int num) {
 }
 
 // ---------------- DecisionTree Class ----------------
-
 class DecisionTree {
 private:
     struct Node {
@@ -306,6 +300,18 @@ private:
         return nodePtr;
     }
     
+    // Recursive function to save the tree structure.
+    void saveNode(shared_ptr<Node> node, ofstream &out, int depth) const {
+        for (int i = 0; i < depth; i++) out << "  ";
+        if(node->isLeaf) {
+            out << "Leaf: prob=" << node->prob << "\n";
+        } else {
+            out << "Node: feature=" << node->featureIndex << ", threshold=" << node->threshold << "\n";
+            saveNode(node->left, out, depth + 1);
+            saveNode(node->right, out, depth + 1);
+        }
+    }
+    
 public:
     DecisionTree(const string &criterion = "gini", int maxDepth = -1, int minSamplesSplit = 2,
                  int minSamplesLeaf = 1, int sampleNum = -1, const string &maxFeatures = "auto")
@@ -345,10 +351,20 @@ public:
             results[i] += computeProb(i, data);
         }
     }
+    
+    // Save the model to a file.
+    void save(const string &filename) const {
+        ofstream out(filename);
+        if (!out) {
+            cerr << "Failed to open file " << filename << " for saving model." << endl;
+            return;
+        }
+        saveNode(root, out, 0);
+        out.close();
+    }
 };
 
-// ---------------- RandomForest Class (MPI) ----------------
-
+// ---------------- RandomForest Class (MPI Version) ----------------
 class RandomForest {
 private:
     vector<DecisionTree> trees;
@@ -356,7 +372,7 @@ private:
 public:
     RandomForest(int nEstimators = 10, string criterion = "gini", string maxFeatures = "auto",
                  int maxDepth = -1, int minSamplesSplit = 2, int minSamplesLeaf = 1,
-                 int eachTreeSamplesNum = -1)
+                 int eachTreeSamplesNum = -1, bool save_all = false)
       : nEstimators(nEstimators) {
         trees.reserve(nEstimators);
         for (int i = 0; i < nEstimators; i++) {
@@ -365,37 +381,50 @@ public:
         }
     }
     
-    // Each process fits its local trees.
     void fit(const Data &data) {
-        for (size_t i = 0; i < trees.size(); i++) {
+        for (int i = 0; i < nEstimators; i++) {
             trees[i].fit(data);
-            //cout << "Local fitted tree " << i + 1 << "/" << trees.size() << endl;
         }
     }
     
-    // Each process computes local predictions.
     vector<double> predictProba(const Data &data) {
         int n = data.getSampleSize();
         vector<double> results(n, 0.0);
-        for (size_t i = 0; i < trees.size(); i++) {
+        for (int i = 0; i < nEstimators; i++) {
             trees[i].predictProba(data, results);
-            //cout << "Local predicted with tree " << i + 1 << "/" << trees.size() << endl;
         }
-        for (int i = 0; i < n; i++)
-            results[i] /= trees.size();
+        for (int i = 0; i < n; i++) {
+            results[i] /= nEstimators;
+        }
         return results;
+    }
+    
+    void saveModels(const string &prefix) const {
+        for (size_t i = 0; i < trees.size(); i++) {
+            string filename = "models/" + prefix + "_tree_" + to_string(i) + ".txt";
+            trees[i].save(filename);
+        }
     }
 };
 
-// ---------------- Main (MPI) ----------------
-
+// ---------------- Main ----------------
 int main(int argc, char *argv[]) {
+    bool save_all = false;
+    if(argc > 1) {
+        string arg = argv[1];
+        if(arg == "save_all")
+            save_all = true;
+    }
+    
     MPI_Init(&argc, &argv);
     
     int rank, nprocs;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
-
+    
+    // Create the models subfolder.
+    system("mkdir -p models");
+    
     auto start_total = high_resolution_clock::now();
     
     int trainSize = 30000;
@@ -407,28 +436,28 @@ int main(int argc, char *argv[]) {
     Data testData(true, testSize, featureSize);
     testData.read("test.txt");
     
-    int totalTrees = 2000;
+    int totalTrees = 100;
     int localTrees = totalTrees / nprocs;
     if(rank < totalTrees % nprocs)
         localTrees++;
-
-    RandomForest rf(localTrees, "gini", "log2", 3, 150, 1, 1000000);
-
+    
+    RandomForest rf(localTrees, "gini", "log2", 3, 150, 1, 1000000, save_all);
+    
     auto start_fit = high_resolution_clock::now();
     rf.fit(trainData);
     auto end_fit = high_resolution_clock::now();
     auto fit_duration = duration_cast<milliseconds>(end_fit - start_fit);
-
+    
     vector<double> localTrainPred = rf.predictProba(trainData);
     int nTrain = trainData.getSampleSize();
     vector<double> globalTrainPred(nTrain, 0.0);
     MPI_Reduce(localTrainPred.data(), globalTrainPred.data(), nTrain, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
+    
     vector<double> localTestPred = rf.predictProba(testData);
     int nTest = testData.getSampleSize();
     vector<double> globalTestPred(nTest, 0.0);
     MPI_Reduce(localTestPred.data(), globalTestPred.data(), nTest, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
+    
     if(rank == 0) {
         for (int i = 0; i < nTrain; i++)
             globalTrainPred[i] /= nprocs;
@@ -443,10 +472,15 @@ int main(int argc, char *argv[]) {
         writeDataToCSV(globalTestPred, testData.getTarget(), "results_mpi.csv", true);
         
         cout << "Training time (MPI): " << fit_duration.count() << " ms" << endl;
-        cout <<  "  Train Accuracy: " << accTrain << endl;
+        cout << "  Train Accuracy: " << accTrain << endl;
         cout << "  Test Accuracy: "  << accTest  << endl;
     }
-
+    
+    if(save_all) {
+        string prefix = "results_model_mpi_rank_" + to_string(rank);
+        rf.saveModels(prefix);
+    }
+    
     MPI_Finalize();
     return 0;
 }
