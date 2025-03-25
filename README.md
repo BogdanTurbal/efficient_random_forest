@@ -57,17 +57,17 @@ A graph (see report) shows the dependency of execution time on the number of tre
 
 - **Sequential Version:**
   ```bash
-  g++ -O2 -std=c++11 sequential.cpp -o sequential
+  g++ -O2 -std=c++17 sequential.cpp -o sequential
   ```
 
 - **OpenMP Version:**
   ```bash
-  g++ -O2 -fopenmp -std=c++11 openmp.cpp -o openmp -lomp
+  g++ -O2 -fopenmp -std=c++17 openmp.cpp -o openmp 
   ```
 
 - **MPI Version:**
   ```bash
-  mpic++ -O2 -std=c++11 mpi.cpp -o mpi
+  mpic++ -O2 -std=c++17 mpi.cpp -o mpi
   ```
 
 ### Running the Executables
