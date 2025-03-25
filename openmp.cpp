@@ -12,15 +12,13 @@
 #include <memory>
 #include <random>
 #include <omp.h>
-
+#include <cstdlib>  // for system()
 using namespace std;
 using namespace std::chrono;
 
-// Use thread_local random engine (each thread gets its own instance).
 thread_local std::mt19937 rng(std::random_device{}());
 
 // ---------------- Utility Functions ----------------
-
 vector<string> splitBySpace(const string &sentence) {
     istringstream iss(sentence);
     return vector<string>{istream_iterator<string>(iss), istream_iterator<string>()};
@@ -45,17 +43,13 @@ void writeDataToCSV(const vector<double> &results, const vector<int>& target, co
     }
 }
 
-// ---------------- Metric Functions ----------------
-
 double computeAUC(const vector<double>& scores, const vector<int>& labels) {
     int n = scores.size();
     vector<pair<double, int>> arr;
     for (int i = 0; i < n; i++) {
         arr.push_back({scores[i], labels[i]});
     }
-    sort(arr.begin(), arr.end(), [](auto &a, auto &b) {
-        return a.first < b.first;
-    });
+    sort(arr.begin(), arr.end(), [](auto &a, auto &b) { return a.first < b.first; });
     int posCount = 0, negCount = 0;
     for (auto &p : arr) {
         if (p.second == 1) posCount++;
@@ -84,7 +78,6 @@ double computeAccuracy(const vector<double>& scores, const vector<int>& labels) 
 }
 
 // ---------------- Data Class ----------------
-
 class Data {
 private:
     vector<vector<double>> features;
@@ -151,7 +144,6 @@ public:
         return samplesVec;
     }
     
-    // Use std::shuffle instead of random_shuffle.
     vector<int> generateSample(int num) const {
         vector<int> samples = samplesVec;
         if(num == -1 || num >= (int)samples.size())
@@ -183,7 +175,6 @@ public:
 };
 
 // ---------------- Decision Tree Functions ----------------
-
 int computeTrueCount(const vector<int>& samples, const Data &data) {
     int total = 0;
     for(auto idx : samples)
@@ -213,8 +204,6 @@ double computeGiniIndex(int leftTrue, int leftSize, int rightTrue, int rightSize
     return leftWeight * computeGini(leftTrue, leftSize) + rightWeight * computeGini(rightTrue, rightSize);
 }
 
-// ---------------- Helper Functions for Feature Selection ----------------
-
 int _sqrt(int num) {
     return max(1, (int) sqrt(num));
 }
@@ -228,7 +217,6 @@ int _none(int num) {
 }
 
 // ---------------- DecisionTree Class ----------------
-
 class DecisionTree {
 private:
     struct Node {
@@ -298,15 +286,28 @@ private:
                 right.push_back(idx);
         }
         if(left.size() < (size_t)minSamplesLeaf || right.size() < (size_t)minSamplesLeaf) {
-            node->isLeaf = true;
-            node->prob = prob;
-            return node;
+            auto leaf = make_shared<Node>();
+            leaf->isLeaf = true;
+            leaf->prob = prob;
+            return leaf;
         }
-        node->featureIndex = bestFeature;
-        node->threshold = bestThreshold;
-        node->left = constructNode(left, data, depth + 1);
-        node->right = constructNode(right, data, depth + 1);
-        return node;
+        auto nodePtr = make_shared<Node>();
+        nodePtr->featureIndex = bestFeature;
+        nodePtr->threshold = bestThreshold;
+        nodePtr->left = constructNode(left, data, depth + 1);
+        nodePtr->right = constructNode(right, data, depth + 1);
+        return nodePtr;
+    }
+    
+    void saveNode(shared_ptr<Node> node, ofstream &out, int depth) const {
+        for (int i = 0; i < depth; i++) out << "  ";
+        if(node->isLeaf) {
+            out << "Leaf: prob=" << node->prob << "\n";
+        } else {
+            out << "Node: feature=" << node->featureIndex << ", threshold=" << node->threshold << "\n";
+            saveNode(node->left, out, depth + 1);
+            saveNode(node->right, out, depth + 1);
+        }
     }
     
 public:
@@ -317,7 +318,7 @@ public:
         if(criterion == "gini")
             criterionFunc = computeGiniIndex;
         else
-            criterionFunc = computeGiniIndex; // default to gini
+            criterionFunc = computeGiniIndex;
         if(maxFeatures == "auto" || maxFeatures == "sqrt")
             maxFeatureFunc = _sqrt;
         else if(maxFeatures == "log2")
@@ -348,10 +349,19 @@ public:
             results[i] += computeProb(i, data);
         }
     }
+    
+    void save(const string &filename) const {
+        ofstream out(filename);
+        if (!out) {
+            cerr << "Failed to open file " << filename << " for saving model." << endl;
+            return;
+        }
+        saveNode(root, out, 0);
+        out.close();
+    }
 };
 
-// ---------------- RandomForest Class (OpenMP) ----------------
-
+// ---------------- RandomForest Class (OpenMP Version) ----------------
 class RandomForest {
 private:
     vector<DecisionTree> trees;
@@ -359,7 +369,7 @@ private:
 public:
     RandomForest(int nEstimators = 10, string criterion = "gini", string maxFeatures = "auto",
                  int maxDepth = -1, int minSamplesSplit = 2, int minSamplesLeaf = 1,
-                 int eachTreeSamplesNum = -1)
+                 int eachTreeSamplesNum = -1, bool save_all = false)
       : nEstimators(nEstimators) {
         trees.reserve(nEstimators);
         for (int i = 0; i < nEstimators; i++) {
@@ -375,12 +385,12 @@ public:
             trees[i].fit(data);
             #pragma omp critical
             {
-                //cout << "Fitted tree " << i + 1 << "/" << nEstimators << endl;
+                // Optionally print progress
             }
         }
     }
     
-    // Parallel prediction: each tree computes predictions in parallel.
+    // Parallel prediction.
     vector<double> predictProba(const Data &data) {
         int n = data.getSampleSize();
         vector<vector<double>> allPred(nEstimators, vector<double>(n, 0.0));
@@ -389,7 +399,7 @@ public:
             trees[i].predictProba(data, allPred[i]);
             #pragma omp critical
             {
-                //cout << "Predicted with tree " << i + 1 << "/" << nEstimators << endl;
+                // Optionally print progress
             }
         }
         vector<double> results(n, 0.0);
@@ -402,11 +412,25 @@ public:
             results[i] /= nEstimators;
         return results;
     }
+    
+    void saveModels(const string &prefix) const {
+        for (size_t i = 0; i < trees.size(); i++) {
+            string filename = "models/" + prefix + "_tree_" + to_string(i) + ".txt";
+            trees[i].save(filename);
+        }
+    }
 };
 
 // ---------------- Main ----------------
-
-int main() {
+int main(int argc, char *argv[]) {
+    bool save_all = false;
+    if(argc > 1) {
+        string arg = argv[1];
+        if(arg == "save_all")
+            save_all = true;
+    }
+    system("mkdir -p models");
+    
     auto start_total = high_resolution_clock::now();
     
     int trainSize = 30000;
@@ -416,7 +440,7 @@ int main() {
     Data trainData(true, trainSize, featureSize);
     trainData.read("train.txt");
     
-    RandomForest rf(2000, "gini", "log2", 3, 150, 1, 1000000);
+    RandomForest rf(100, "gini", "log2", 3, 150, 1, 1000000, save_all);
     auto start_fit = high_resolution_clock::now();
     rf.fit(trainData);
     auto end_fit = high_resolution_clock::now();
@@ -446,7 +470,11 @@ int main() {
     cout << "Prediction time (OpenMP): " << pred_duration.count() << " ms" << endl;
     cout << "Total time (OpenMP): " << total_duration.count() << " ms" << endl;
     cout << "  Train Accuracy: " << accTrain << endl;
-    cout << "  Test Accuracy: "  << accTest  << endl;
+    cout << "  Test Accuracy: "  << accTest << endl;
+    
+    if(save_all) {
+        rf.saveModels("results_model_openmp");
+    }
     
     return 0;
 }
